@@ -1,0 +1,29 @@
+# LLM providers
+anthropic>=0.25.0
+groq>=0.4.0
+google-generativeai>=0.8.0
+openai>=1.0.0
+
+# Embeddings
+sentence-transformers>=2.7.0
+
+# Storage
+psycopg2-binary>=2.9.0
+
+# Scraping
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+lxml>=5.2.0
+
+# ML / stats
+scikit-learn>=1.5.0
+numpy>=1.26.0
+
+# UI
+streamlit>=1.35.0
+
+# Utilities
+pyyaml>=6.0
+
+# Dev / test
+pytest>=8.2.0
