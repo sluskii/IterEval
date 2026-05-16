@@ -296,6 +296,7 @@ def _run_reeval_iteration(
     db, run_id: str, api_key: str, iteration: int,
     bot_type: str, endpoint: str, run_meta: dict,
     use_improved_mock: bool = False,
+    model: str = "",
 ) -> None:
     from goveval.storage.db import DB
     from goveval.eval.engine import run_eval
@@ -303,7 +304,7 @@ def _run_reeval_iteration(
     from goveval.config.loader import GovEvalConfig, TargetConfig, KnowledgeBaseConfig, LLMConfig, EvalConfig, StorageConfig
     from goveval.questions.categories import Question
 
-    llm = _make_pipeline_llm_client({"llm_api_key": api_key}, fallback_key=api_key)
+    llm = _make_pipeline_llm_client({"llm_api_key": api_key, "llm_model": model or ""}, fallback_key=api_key)
 
     raw_qs = db.get_questions(run_id)
     if not raw_qs:
@@ -339,8 +340,10 @@ def _run_reeval_iteration(
 
     local_fn = None
     if bot_type == "mock":
-        import test_run as _tr
-        local_fn = _tr.improved_mock_bot if use_improved_mock else _tr.mock_bot
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", "..", "demo"))
+        from mock_bot import mock_bot as _mock_bot, improved_mock_bot as _improved_mock_bot
+        local_fn = _improved_mock_bot if use_improved_mock else _mock_bot
     elif bot_type == "vica":
         local_fn = _make_vica_fn(
             page_url=run_meta.get("config_json_parsed", {}).get("vica_page_url", "https://www.tech.gov.sg/"),
@@ -366,6 +369,7 @@ def render_iterations(
     run_id: str = "",
     api_key: str = "",
     run_meta: dict | None = None,
+    model: str = "",
 ) -> None:
     """Iterations page: metric trend chart + table."""
     import pandas as pd
@@ -431,7 +435,7 @@ def render_iterations(
                 _run_reeval_iteration(
                     db=db, run_id=run_id, api_key=api_key,
                     iteration=next_iter, bot_type=bot_type, endpoint=endpoint,
-                    run_meta=run_meta or {}, use_improved_mock=use_improved,
+                    run_meta=run_meta or {}, use_improved_mock=use_improved, model=model,
                 )
 
     if len(iterations) == 1:
@@ -548,14 +552,20 @@ def render_metrics(verdicts: list[dict], metrics: dict) -> None:
     )
 
 
-def _client_from_key(api_key: str):
-    """Build a lightweight LLMClient inferred from key prefix."""
+def _client_from_key(api_key: str, model: str = ""):
+    """Build a lightweight LLMClient inferred from key prefix, with optional model override."""
     from goveval.llm.client import LLMClient
     if api_key.startswith("gsk_"):
-        return LLMClient(model="llama-3.3-70b-versatile", api_key=api_key,
-                         rate_limit_delay=0.5, provider="groq")
-    return LLMClient(model="claude-haiku-4-5-20251001", api_key=api_key,
-                     rate_limit_delay=0.5, provider="anthropic")
+        m = model or "llama-3.3-70b-versatile"
+        return LLMClient(model=m, api_key=api_key, rate_limit_delay=0.5, provider="groq")
+    elif api_key.startswith("AIza"):
+        m = model or "gemini-2.0-flash"
+        return LLMClient(model=m, api_key=api_key, rate_limit_delay=0.5, provider="gemini")
+    elif api_key.startswith("sk-"):
+        m = model or "gpt-4o-mini"
+        return LLMClient(model=m, api_key=api_key, rate_limit_delay=0.5, provider="openai")
+    m = model or "claude-haiku-4-5-20251001"
+    return LLMClient(model=m, api_key=api_key, rate_limit_delay=0.5, provider="anthropic")
 
 
 def _make_pipeline_llm_client(p: dict, fallback_key: str = ""):
@@ -604,7 +614,7 @@ def _make_pipeline_llm_client(p: dict, fallback_key: str = ""):
 _SEV_ICON = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}
 
 
-def render_failures(db, run_id: str, api_key: str = "") -> None:
+def render_failures(db, run_id: str, api_key: str = "", model: str = "") -> None:
     """Failures page — failure detection, ML clustering, LLM hypotheses, training samples."""
 
     # ── Flow guide ────────────────────────────────────────────────────────────
@@ -693,7 +703,7 @@ def render_failures(db, run_id: str, api_key: str = "") -> None:
                     try:
                         from goveval.analysis.failure_analyser import analyse_failures
                         st.write("Loading sentence-transformer embedding model…")
-                        llm = _client_from_key(api_key)
+                        llm = _client_from_key(api_key, model)
                         st.write(f"Embedding {len(failures)} failed questions…")
                         fa = analyse_failures(
                             verdicts=verdicts,
@@ -750,7 +760,7 @@ def render_failures(db, run_id: str, api_key: str = "") -> None:
                     with st.status("Generating hypotheses…", expanded=True) as status:
                         try:
                             from goveval.analysis.hypothesis import generate_hypotheses
-                            llm = _client_from_key(api_key)
+                            llm = _client_from_key(api_key, model)
                             hyps, errs = generate_hypotheses(fa, llm)
                             st.session_state[fh_key] = hyps
                             if errs:
@@ -837,7 +847,7 @@ def render_failures(db, run_id: str, api_key: str = "") -> None:
                                         from goveval.improvement.prompt_optimiser import (
                                             generate_candidates, diff_lines,
                                         )
-                                        llm = _client_from_key(api_key)
+                                        llm = _client_from_key(api_key, model)
                                         cluster = next(
                                             (c for c in fa.clusters if c.cluster_id == h.cluster_id), None
                                         )
@@ -935,7 +945,7 @@ def render_failures(db, run_id: str, api_key: str = "") -> None:
                                 with st.status("Generating training sample…", expanded=True) as status:
                                     try:
                                         from goveval.improvement.data_generator import generate_training_sample
-                                        llm = _client_from_key(api_key)
+                                        llm = _client_from_key(api_key, model)
                                         cluster = next(
                                             (c for c in fa.clusters if c.cluster_id == h.cluster_id), None
                                         )
@@ -1031,7 +1041,7 @@ def render_failures(db, run_id: str, api_key: str = "") -> None:
                                 with st.status("Generating training pairs…", expanded=True) as status:
                                     try:
                                         from goveval.improvement.data_generator import generate_qa_pairs
-                                        llm = _client_from_key(api_key)
+                                        llm = _client_from_key(api_key, model)
                                         cluster = next(
                                             (c for c in fa.clusters if c.cluster_id == h.cluster_id), None
                                         )
@@ -1220,10 +1230,12 @@ def _extract_chunks_from_pipeline(p: dict) -> list:
     _PARTIAL_KB_IDS = {"cpf_001", "cpf_002", "hdb_001", "bb_001", "cdc_001"}
 
     if p["source_mode"] in ("mock", "mock_partial"):
-        import test_run as _tr
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", "..", "demo"))
+        from demo_dataset import get_demo_kb_chunks
         from datetime import date
         today = date.today().isoformat()
-        raw = _tr._RAW_CHUNKS
+        raw = get_demo_kb_chunks()
         if p["source_mode"] == "mock_partial":
             raw = [c for c in raw if c["chunk_id"] in _PARTIAL_KB_IDS]
         return [
@@ -1923,8 +1935,10 @@ def _run_full_pipeline(p: dict, api_key: str, db_path: str) -> None:
 
     local_fn = None
     if p["bot_type"] == "mock":
-        import test_run as _tr
-        local_fn = _tr.mock_bot
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", "..", "demo"))
+        from mock_bot import mock_bot as _mock_bot
+        local_fn = _mock_bot
 
     with st.status(f"Evaluating {p['bot_name']}  ·  run_id = {run_id}", expanded=True) as status:
         st.write(f"Step 1/3 — Probing {p['bot_name']} with {len(questions)} questions…")
@@ -2227,7 +2241,7 @@ def _render_guide(db_exists: bool) -> None:
         )
 
 
-def render_judge_validation(db, run_id: str, api_key: str = "") -> None:
+def render_judge_validation(db, run_id: str, api_key: str = "", model: str = "") -> None:
     """
     Judge Validation tab — human-in-the-loop Cohen's Kappa workflow.
 
@@ -2398,7 +2412,7 @@ def render_judge_validation(db, run_id: str, api_key: str = "") -> None:
             with st.status("Running LLM judge on sample…", expanded=True) as status:
                 try:
                     from goveval.eval.judge_validator import validate_judge
-                    llm = _client_from_key(api_key)
+                    llm = _client_from_key(api_key, model)
 
                     ordered_sample = [p for p in sample if p["question_id"] in labels]
                     human_labels_list = [labels[p["question_id"]] for p in ordered_sample]
@@ -2528,7 +2542,7 @@ def render_judge_validation(db, run_id: str, api_key: str = "") -> None:
         )
 
 
-def run_dashboard(db_path: str = "goveval_test.db", report_path: Optional[str] = None, api_key: str = "") -> None:
+def run_dashboard(db_path: str = "goveval_test.db", report_path: Optional[str] = None, api_key: str = "", model: str = "") -> None:
     """
     Main dashboard entry point.
     Called by ui/app.py. Loads DB, renders sidebar run selector + 6 page tabs.
@@ -2611,13 +2625,13 @@ def run_dashboard(db_path: str = "goveval_test.db", report_path: Optional[str] =
         render_metrics(verdicts, latest_metrics)
 
     with tab_failures:
-        render_failures(db, run_id, api_key=api_key)
+        render_failures(db, run_id, api_key=api_key, model=model)
 
     with tab_iterations:
-        render_iterations(iterations, db=db, run_id=run_id, api_key=api_key, run_meta=run_meta)
+        render_iterations(iterations, db=db, run_id=run_id, api_key=api_key, run_meta=run_meta, model=model)
 
     with tab_questions:
         render_questions(db, run_id)
 
     with tab_validation:
-        render_judge_validation(db, run_id, api_key=api_key)
+        render_judge_validation(db, run_id, api_key=api_key, model=model)
