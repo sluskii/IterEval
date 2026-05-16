@@ -2,11 +2,10 @@
 ui/app.py — IterEval Streamlit entry point.
 
 Launch:
-    cd "experiment 3"
     streamlit run ui/app.py
 
 Env vars:
-    DB_PATH, ANTHROPIC_API_KEY, GROQ_API_KEY
+    GOVEVAL_PG_DSN, ANTHROPIC_API_KEY, GROQ_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY
 """
 
 from __future__ import annotations
@@ -437,9 +436,9 @@ st.sidebar.caption("Evaluate · Diagnose · Fix · Re-evaluate")
 st.sidebar.divider()
 
 db_path = st.sidebar.text_input(
-    "Database path",
-    value=os.environ.get("DB_PATH", "goveval_test.db"),
-    help="SQLite database produced by the eval pipeline",
+    "PostgreSQL DSN",
+    value=os.environ.get("GOVEVAL_PG_DSN", "postgresql://localhost/goveval"),
+    help="PostgreSQL connection string, e.g. postgresql://user:pass@host/dbname",
 )
 
 st.sidebar.divider()
