@@ -17,6 +17,7 @@ class DB:
         import psycopg2
 
         dsn = path or os.environ.get("GOVEVAL_PG_DSN", "postgresql://localhost/goveval")
+        self.path = dsn
         self._conn = psycopg2.connect(dsn)
         self._conn.autocommit = False
         self._init_schema()
@@ -38,16 +39,21 @@ class DB:
             """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS questions (
-                    question_id   TEXT PRIMARY KEY,
-                    run_id        TEXT,
-                    category      TEXT,
-                    language      TEXT,
-                    text          TEXT,
-                    ground_truth  TEXT,
-                    gt_source     TEXT,
-                    is_held_out   INTEGER DEFAULT 0,
+                    question_id        TEXT PRIMARY KEY,
+                    run_id             TEXT,
+                    category           TEXT,
+                    language           TEXT,
+                    text               TEXT,
+                    ground_truth       TEXT,
+                    gt_source          TEXT,
+                    is_held_out        INTEGER DEFAULT 0,
+                    expected_behavior  TEXT DEFAULT 'answer',
                     FOREIGN KEY(run_id) REFERENCES runs(run_id)
                 )
+            """)
+            cur.execute("""
+                ALTER TABLE questions
+                ADD COLUMN IF NOT EXISTS expected_behavior TEXT DEFAULT 'answer'
             """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS responses (
@@ -142,21 +148,23 @@ class DB:
                     """
                     INSERT INTO questions
                         (question_id, run_id, category, language, text,
-                         ground_truth, gt_source, is_held_out)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         ground_truth, gt_source, is_held_out, expected_behavior)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (question_id) DO UPDATE SET
-                        category     = EXCLUDED.category,
-                        language     = EXCLUDED.language,
-                        text         = EXCLUDED.text,
-                        ground_truth = EXCLUDED.ground_truth,
-                        gt_source    = EXCLUDED.gt_source,
-                        is_held_out  = EXCLUDED.is_held_out
+                        category          = EXCLUDED.category,
+                        language          = EXCLUDED.language,
+                        text              = EXCLUDED.text,
+                        ground_truth      = EXCLUDED.ground_truth,
+                        gt_source         = EXCLUDED.gt_source,
+                        is_held_out       = EXCLUDED.is_held_out,
+                        expected_behavior = EXCLUDED.expected_behavior
                     """,
                     (
                         q["question_id"], q["run_id"], q["category"],
                         q.get("language", "en"), q["text"],
                         q.get("ground_truth", ""), q.get("gt_source", ""),
                         int(q.get("is_held_out", False)),
+                        q.get("expected_behavior", "answer"),
                     ),
                 )
         self._conn.commit()
