@@ -84,32 +84,61 @@ def _metric_card(label: str, value: str, key: str, raw: float, note: str = "") -
     )
 
 
-def _get_question_verdicts(db, run_id: str) -> list[dict]:
-    """Join questions → responses → verdicts into display rows."""
-    rows = db.query(
-        """
-        SELECT
-            q.question_id,
-            q.category,
-            q.language,
-            q.text        AS question_text,
-            q.ground_truth,
-            r.response_id,
-            r.response_text,
-            r.latency_ms,
-            r.iteration,
-            v.detail_json
-        FROM questions q
-        LEFT JOIN responses r
-            ON r.question_id = q.question_id AND r.run_id = q.run_id
-        LEFT JOIN verdicts v
-            ON v.response_id = r.response_id
-        WHERE q.run_id = ?
-        ORDER BY q.question_id, r.iteration
-        """,
-        (run_id,),
-    )
-    # Parse detail_json and deduplicate by keeping latest iteration per question
+def _get_question_verdicts(db, run_id: str, iteration: int | None = None) -> list[dict]:
+    """Join questions → responses → verdicts into display rows.
+
+    If iteration is given, returns only rows for that iteration.
+    Otherwise deduplicates by keeping the latest iteration per question.
+    """
+    if iteration is not None:
+        rows = db.query(
+            """
+            SELECT
+                q.question_id,
+                q.category,
+                q.language,
+                q.text        AS question_text,
+                q.ground_truth,
+                r.response_id,
+                r.response_text,
+                r.latency_ms,
+                r.iteration,
+                v.detail_json
+            FROM questions q
+            LEFT JOIN responses r
+                ON r.question_id = q.question_id AND r.run_id = q.run_id
+            LEFT JOIN verdicts v
+                ON v.response_id = r.response_id
+            WHERE q.run_id = %s AND r.iteration = %s
+            ORDER BY q.question_id
+            """,
+            (run_id, iteration),
+        )
+    else:
+        rows = db.query(
+            """
+            SELECT
+                q.question_id,
+                q.category,
+                q.language,
+                q.text        AS question_text,
+                q.ground_truth,
+                r.response_id,
+                r.response_text,
+                r.latency_ms,
+                r.iteration,
+                v.detail_json
+            FROM questions q
+            LEFT JOIN responses r
+                ON r.question_id = q.question_id AND r.run_id = q.run_id
+            LEFT JOIN verdicts v
+                ON v.response_id = r.response_id
+            WHERE q.run_id = %s
+            ORDER BY q.question_id, r.iteration
+            """,
+            (run_id,),
+        )
+
     seen: dict[str, dict] = {}
     for row in rows:
         qid = row["question_id"]
@@ -121,7 +150,9 @@ def _get_question_verdicts(db, run_id: str) -> list[dict]:
                 pass
         merged = dict(row)
         merged["detail"] = detail
-        if qid not in seen or (row.get("iteration") or 0) >= (seen[qid].get("iteration") or 0):
+        if iteration is not None:
+            seen[qid] = merged
+        elif qid not in seen or (row.get("iteration") or 0) >= (seen[qid].get("iteration") or 0):
             seen[qid] = merged
     return list(seen.values())
 
@@ -195,7 +226,7 @@ def render_overview(metrics: dict, tier: str, risk_reasons: list[str], run_meta:
         "Amber if":   ["> 10%", "< 80%", "< 3.5", "> 15%", "> 0.20", "< 60%"],
         "Red if":     ["> 20%", "< 50%", "< 2.5", "—",     "—",      "—"],
     }
-    st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(tbl), width="stretch", hide_index=True)
 
     # ── Iteration sparklines ──────────────────────────────────────────────────
     if iterations and len(iterations) > 1:
@@ -229,7 +260,29 @@ def render_questions(db, run_id: str) -> None:
     """Questions page: filterable table + expandable per-question detail."""
     import pandas as pd
 
-    rows = _get_question_verdicts(db, run_id)
+    # Iteration selector
+    iter_rows = db.query(
+        "SELECT DISTINCT iteration FROM responses WHERE run_id = %s ORDER BY iteration",
+        (run_id,),
+    )
+    available_iters = [r["iteration"] for r in iter_rows if r["iteration"] is not None]
+
+    selected_iter: int | None = None
+    if available_iters:
+        iter_labels = {
+            i: f"Iteration {i}" + (" (latest)" if i == max(available_iters) else "")
+            for i in available_iters
+        }
+        col_iter, _ = st.columns([1, 3])
+        with col_iter:
+            selected_iter = st.selectbox(
+                "Iteration",
+                options=available_iters,
+                index=len(available_iters) - 1,
+                format_func=lambda i: iter_labels[i],
+            )
+
+    rows = _get_question_verdicts(db, run_id, iteration=selected_iter)
     if not rows:
         st.info("No question verdicts found for this run.")
         return
@@ -267,8 +320,9 @@ def render_questions(db, run_id: str) -> None:
 
         # Header line
         tier_icon = "🔴" if hall_rate > 0.20 else ("🟡" if hall_rate > 0 else "🟢")
+        iter_tag = f" · iter {row.get('iteration', '?')}" if row.get("iteration") else ""
         label = (
-            f"{tier_icon} **{row['question_id']}** "
+            f"{tier_icon} **{row['question_id']}**{iter_tag} "
             f"— `{row['category']}` / `{row['language']}` "
             f"— Hall: {_pct(hall_rate)} · Refusal: {refusal}"
         )
@@ -333,7 +387,8 @@ def _run_reeval_iteration(
         eval=EvalConfig(
             question_bank_size=len(questions), held_out_size=0,
             human_label_sample=0, iterations=1,
-            improvement_threshold=0.02, singlish=True, rate_limit_delay=0.3,
+            improvement_threshold=0.02, singlish=True,
+            rate_limit_delay=0.0 if bot_type == "mock" else 0.3,
         ),
         storage=StorageConfig(db_path=db.path, results_dir="results"),
     )
@@ -464,7 +519,7 @@ def render_iterations(
     for col in display_df.columns:
         if "rate" in col or "gap" in col or "precision" in col or "recall" in col or "avg" == col[-3:]:
             display_df[col] = display_df[col].map(lambda x: f"{x*100:.1f}%" if isinstance(x, float) else x)
-    st.dataframe(display_df, use_container_width=True)
+    st.dataframe(display_df, width="stretch")
 
 
 def render_metrics(verdicts: list[dict], metrics: dict) -> None:
@@ -501,7 +556,7 @@ def render_metrics(verdicts: list[dict], metrics: dict) -> None:
          "Refusal Class": v["detail"].get("refusal", "—")}
         for v in verdicts
     ]
-    st.dataframe(pd.DataFrame(ref_rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(ref_rows), hide_index=True, width="stretch")
 
     # Faithfulness per question
     st.divider()
@@ -552,6 +607,12 @@ def render_metrics(verdicts: list[dict], metrics: dict) -> None:
     )
 
 
+@st.cache_resource
+def _get_db(db_path: str):
+    from goveval.storage.db import DB
+    return DB(db_path)
+
+
 def _client_from_key(api_key: str, model: str = ""):
     """Build a lightweight LLMClient inferred from key prefix, with optional model override."""
     from goveval.llm.client import LLMClient
@@ -561,6 +622,9 @@ def _client_from_key(api_key: str, model: str = ""):
     elif api_key.startswith("AIza"):
         m = model or "gemini-2.0-flash"
         return LLMClient(model=m, api_key=api_key, rate_limit_delay=0.5, provider="gemini")
+    elif api_key.startswith("sk-ant-"):
+        m = model or "claude-haiku-4-5-20251001"
+        return LLMClient(model=m, api_key=api_key, rate_limit_delay=0.5, provider="anthropic")
     elif api_key.startswith("sk-"):
         m = model or "gpt-4o-mini"
         return LLMClient(model=m, api_key=api_key, rate_limit_delay=0.5, provider="openai")
@@ -717,10 +781,10 @@ def render_failures(db, run_id: str, api_key: str = "", model: str = "") -> None
                             label=f"Found {len(fa.clusters)} failure cluster(s) — dominant: {fa.dominant_pattern}",
                             state="complete",
                         )
+                        st.rerun()
                     except Exception as e:
                         status.update(label=f"Analysis failed: {e}", state="error")
                         st.error(str(e))
-                st.rerun()
 
         if fa_key in st.session_state:
             fa = st.session_state[fa_key]
@@ -755,6 +819,7 @@ def render_failures(db, run_id: str, api_key: str = "", model: str = "") -> None
                 "missing KB content, wrong prompt instruction, or retrieval parameter issue."
             )
 
+            fh_err_key = f"{fh_key}_errors"
             if fh_key not in st.session_state:
                 if st.button("Generate Improvement Hypotheses", type="primary", key="btn_hyp"):
                     with st.status("Generating hypotheses…", expanded=True) as status:
@@ -763,22 +828,22 @@ def render_failures(db, run_id: str, api_key: str = "", model: str = "") -> None
                             llm = _client_from_key(api_key, model)
                             hyps, errs = generate_hypotheses(fa, llm)
                             st.session_state[fh_key] = hyps
-                            if errs:
-                                for e in errs:
-                                    st.warning(e)
+                            st.session_state[fh_err_key] = errs
                             status.update(
                                 label=f"Generated {len(hyps)} hypothesis/hypotheses",
                                 state="complete",
                             )
+                            st.rerun()
                         except Exception as e:
                             status.update(label=f"Failed: {e}", state="error")
                             st.error(str(e))
-                    st.rerun()
 
             if fh_key in st.session_state:
                 hypotheses = st.session_state[fh_key]
+                for err in st.session_state.get(fh_err_key, []):
+                    st.warning(err)
                 if not hypotheses:
-                    st.info("No hypotheses generated — check errors above.")
+                    st.info("No hypotheses generated — see warnings above for details.")
                 _type_badge = {
                     "MISSING_KB":      ("🗂️", "#fef3c7", "#92400e"),
                     "WRONG_PROMPT":    ("📝", "#dbeafe", "#1e40af"),
@@ -1811,13 +1876,16 @@ def _step3_questions(p: dict, api_key: str) -> None:
                 "Chunks to generate questions from",
                 min_value=1,
                 max_value=_slider_max,
-                value=min(len(chunks), 5),
-                help="~4 questions are generated per chunk (formal, Singlish, out-of-scope, adversarial)",
+                value=min(len(chunks), 3),
+                help="~4 questions per chunk. Keep low (3–5) for a fast demo run; raise for fuller coverage.",
             )
         else:
             max_chunks = 1
             st.info(f"1 chunk available — will generate ~4 questions from it.")
-        st.caption(f"Will generate ~{max_chunks * 4} questions using {max_chunks} chunks.")
+        est_q = max_chunks * 4
+        est_min_lo = max(1, est_q * 8 // 60)
+        est_min_hi = max(2, est_q * 15 // 60)
+        st.caption(f"~{est_q} questions · estimated eval time {est_min_lo}–{est_min_hi} min (Groq) / {est_min_hi * 3}–{est_min_hi * 5} min (Anthropic/OpenAI)")
 
         col_b2, col_gen = st.columns([1, 3])
         with col_b2:
@@ -1914,7 +1982,8 @@ def _run_full_pipeline(p: dict, api_key: str, db_path: str) -> None:
         knowledge_base=KnowledgeBaseConfig(mode="connect"),
         llm=LLMConfig(provider=llm.provider, model=llm.model, api_key_env=""),
         eval=EvalConfig(question_bank_size=len(questions), held_out_size=0, human_label_sample=0,
-                        iterations=1, improvement_threshold=0.02, singlish=True, rate_limit_delay=0.3),
+                        iterations=1, improvement_threshold=0.02, singlish=True,
+                        rate_limit_delay=0.0 if p["bot_type"] == "mock" else 0.3),
         storage=StorageConfig(db_path=db_path, results_dir="results"),
     )
 
@@ -2477,7 +2546,7 @@ def render_judge_validation(db, run_id: str, api_key: str = "", model: str = "")
             index=["Human: Clean (0)", "Human: Hallucination (1)"],
             columns=["Judge: Clean (0)", "Judge: Hallucination (1)"],
         )
-        st.dataframe(cm_df, use_container_width=False)
+        st.dataframe(cm_df, width="content")
 
         tn, fp = cm[0]
         fn, tp = cm[1]
@@ -2503,7 +2572,7 @@ def render_judge_validation(db, run_id: str, api_key: str = "", model: str = "")
                 "—"   if kr.kappa >= 0.6 else "TRIGGERED",
             ],
         }
-        st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(tbl), width="stretch", hide_index=True)
 
         # Download
         st.divider()
@@ -2547,11 +2616,15 @@ def run_dashboard(db_path: str = "goveval_test.db", report_path: Optional[str] =
     Main dashboard entry point.
     Called by ui/app.py. Loads DB, renders sidebar run selector + 6 page tabs.
     """
-    from goveval.storage.db import DB
     from goveval.eval.engine import compute_risk_tier
-    import os
 
-    db_exists = os.path.exists(db_path)
+    try:
+        db = _get_db(db_path)
+        db_exists = True
+    except Exception:
+        db = None
+        db_exists = False
+
     _render_guide(db_exists)
 
     # Always show Run Eval tab even if DB doesn't exist yet
@@ -2562,16 +2635,15 @@ def run_dashboard(db_path: str = "goveval_test.db", report_path: Optional[str] =
     with tab_run:
         render_run_eval(db_path, api_key=api_key)
 
-    if not os.path.exists(db_path):
+    if not db_exists:
         for tab in (tab_overview, tab_metrics, tab_failures, tab_iterations, tab_questions, tab_validation):
             with tab:
                 st.info(
-                    f"Database `{db_path}` not found.  \n"
-                    "Go to the **Run Eval** tab to run your first evaluation."
+                    f"Could not connect to database `{db_path}`.  \n"
+                    "Check that PostgreSQL is running and the DSN in the sidebar is correct."
                 )
         return
 
-    db = DB(db_path)
     runs = db.get_runs()
 
     if not runs:
