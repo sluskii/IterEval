@@ -22,8 +22,22 @@ class DB:
         self._conn.autocommit = False
         self._init_schema()
 
+    def _ensure_healthy(self) -> None:
+        import psycopg2
+        import psycopg2.extensions
+        try:
+            status = self._conn.get_transaction_status()
+            if status == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
+                self._conn.rollback()
+            if self._conn.closed:
+                raise psycopg2.OperationalError("closed")
+        except Exception:
+            self._conn = psycopg2.connect(self.path)
+            self._conn.autocommit = False
+
     def _cursor(self):
         import psycopg2.extras
+        self._ensure_healthy()
         return self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     def _init_schema(self) -> None:
