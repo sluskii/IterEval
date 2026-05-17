@@ -402,7 +402,7 @@ def _run_reeval_iteration(
     elif bot_type == "vica":
         local_fn = _make_vica_fn(
             page_url=run_meta.get("config_json_parsed", {}).get("vica_page_url", "https://www.tech.gov.sg/"),
-            trigger_text=run_meta.get("config_json_parsed", {}).get("vica_trigger_text", "Ask GovTech"),
+            trigger_text=run_meta.get("config_json_parsed", {}).get("vica_trigger_text", "Ask a question"),
         )
 
     with st.status(f"Running iteration {iteration} for run `{run_id}`…", expanded=True) as status:

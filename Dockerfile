@@ -3,13 +3,14 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
-    grep -v "^pytest\|^torch" requirements.txt | pip install --no-cache-dir -r /dev/stdin
+RUN pip install --no-cache-dir torch==2.2.2+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    grep -v "^pytest" requirements.txt | pip install --no-cache-dir -r /dev/stdin
 
 COPY . .
 
 ENV PYTHONPATH=/app
 ENV SENTENCE_TRANSFORMERS_HOME=/app/.cache/sentence_transformers
+ENV PYTHONUNBUFFERED=1
 
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 

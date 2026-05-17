@@ -11,7 +11,7 @@ Env vars:
 from __future__ import annotations
 
 import os
-import _sysconfigdata__darwin_darwin
+import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import streamlit as st

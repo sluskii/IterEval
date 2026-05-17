@@ -3,3 +3,9 @@
 *.env
 __pycache__
 *.pyc
+*.pyo
+.DS_Store
+.streamlit/
+*.db
+kappa_validation_report.json
+eval_results_*.json
