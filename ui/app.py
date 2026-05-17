@@ -11,8 +11,7 @@ Env vars:
 from __future__ import annotations
 
 import os
-import sys
-
+import _sysconfigdata__darwin_darwin
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import streamlit as st
@@ -478,6 +477,32 @@ if _api_key:
         st.sidebar.markdown(_BADGE.format("✓ OpenAI — gpt-4o-mini"), unsafe_allow_html=True)
     else:
         st.sidebar.warning("Key prefix not recognised", icon="⚠")
+
+    if st.sidebar.button("⚡ Test API connection", help="Send a minimal request to verify the key works"):
+        from goveval.llm.client import LLMClient
+        try:
+            if _api_key.startswith("gsk_"):
+                _test_client = LLMClient(model="llama-3.3-70b-versatile", api_key=_api_key, provider="groq")
+            elif _api_key.startswith("AIza"):
+                _test_client = LLMClient(model="gemini-2.0-flash", api_key=_api_key, provider="gemini")
+            elif _api_key.startswith("sk-ant-"):
+                _test_client = LLMClient(model="claude-haiku-4-5-20251001", api_key=_api_key, provider="anthropic")
+            elif _api_key.startswith("sk-"):
+                _test_client = LLMClient(model="gpt-4o-mini", api_key=_api_key, provider="openai")
+            else:
+                _test_client = LLMClient(model="claude-haiku-4-5-20251001", api_key=_api_key, provider="anthropic")
+            _resp = _test_client.complete("Reply with the single word OK.", max_tokens=5)
+            st.sidebar.success(f"✓ Connected — response: `{_resp.strip()[:30]}`")
+        except Exception as _e:
+            st.sidebar.error(f"✗ Failed: {_e}")
+
+st.sidebar.divider()
+if st.sidebar.button("🗑 Clear session cache", help="Clears all in-memory analysis results (clusters, hypotheses, training pairs). Does not delete database runs."):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    for k in list(st.session_state.keys()):
+        del st.session_state[k]
+    st.rerun()
 
 st.sidebar.divider()
 st.sidebar.markdown(
