@@ -202,7 +202,7 @@ def _embed_questions(texts: list[str]):
     global _ST_MODEL
     if _ST_MODEL is None:
         from sentence_transformers import SentenceTransformer
-        _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
     return _ST_MODEL.encode(texts)
 
 
