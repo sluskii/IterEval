@@ -19,6 +19,16 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 TABLE = "kb_chunks"
 
+_ST_MODEL = None
+
+
+def _get_model():
+    global _ST_MODEL
+    if _ST_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        _ST_MODEL = SentenceTransformer(EMBEDDING_MODEL, device="cpu")
+    return _ST_MODEL
+
 
 def _vec_str(arr) -> str:
     """Format a numpy/list array as a pgvector literal: '[0.1,0.2,...]'."""
@@ -69,10 +79,9 @@ def embed_and_store(chunks: List[Chunk], dsn: str = "") -> int:
     """
     import psycopg2
     from psycopg2.extras import execute_values
-    from sentence_transformers import SentenceTransformer
 
     dsn = dsn or os.environ.get("GOVEVAL_PG_DSN", "postgresql://localhost/goveval")
-    model = SentenceTransformer(EMBEDDING_MODEL)
+    model = _get_model()
 
     conn = psycopg2.connect(dsn)
     try:
